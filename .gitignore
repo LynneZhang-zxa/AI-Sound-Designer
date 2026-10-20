@@ -72,3 +72,8 @@ __pycache__/
 *.pyc
 .env
 .env.*
+
+# Offline ML datasets, inspection artifacts, and future runs
+ml/data/
+ml/runs/
+ml/.venv/

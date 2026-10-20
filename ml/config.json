@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "seed": 20261020,
+  "examples": 100,
+  "target_order": ["cutoff", "attack", "release"],
+  "sampling": {"cutoff": [100.0, 10000.0], "attack": [0.01, 0.5], "release": [0.02, 1.5]},
+  "split_counts": {"train": 80, "validation": 10, "test": 10},
+  "fixed_parameters": {"waveform": 1, "decay": 0.1, "sustain": 0.8, "resonance": 0.707, "gain": 0.8},
+  "renderer": {"sample_rate": 48000, "block_size": 256, "duration_seconds": 4.0, "warmup_seconds": 0.05, "note_on_seconds": 0.1, "note_off_seconds": 1.5, "midi_note": 48, "velocity": 0.8, "wav_bits": 24},
+  "features": {"n_fft": 1024, "hop_length": 256, "n_mels": 64, "fmin": 20.0, "fmax": 20000.0, "log_floor": 1e-12, "center": false, "mel_scale": "htk"}
+}

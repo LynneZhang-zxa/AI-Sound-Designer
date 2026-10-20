@@ -1,0 +1,14 @@
+{
+  "seed": 20261020,
+  "shuffled_label_seed": 20261021,
+  "device": "cpu",
+  "torch_threads": 4,
+  "batch_size": 32,
+  "max_epochs": 30,
+  "early_stopping_patience": 5,
+  "learning_rate": 0.001,
+  "optimizer": "Adam",
+  "loss": "normalized_mse",
+  "latency_warmups": 30,
+  "latency_repeats": 200
+}

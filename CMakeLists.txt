@@ -72,3 +72,12 @@ add_custom_command(TARGET AISoundDesigner_AU POST_BUILD
     COMMAND "${CMAKE_COMMAND}" "-DBUNDLE=$<TARGET_BUNDLE_DIR:AISoundDesigner_AU>"
         -P "${CMAKE_SOURCE_DIR}/cmake/SignDevelopmentBundle.cmake"
     VERBATIM)
+
+# Offline-only experiment. Default builds and installed plugin behavior are unchanged.
+option(AISD_BUILD_ML_RENDERER "Build the offline dataset renderer" OFF)
+if(AISD_BUILD_ML_RENDERER)
+    add_executable(DatasetRenderer ml/render_dataset.cpp)
+    target_include_directories(DatasetRenderer PRIVATE plugin/Source "${juce_SOURCE_DIR}/modules")
+    target_compile_features(DatasetRenderer PRIVATE cxx_std_17)
+    target_link_libraries(DatasetRenderer PRIVATE AISoundDesigner)
+endif()

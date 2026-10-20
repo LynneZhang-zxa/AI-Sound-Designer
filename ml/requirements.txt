@@ -1,0 +1,4 @@
+# Smoke-stage environment tested with Python 3.12.9. No training dependencies yet.
+numpy==1.26.4
+scipy==1.15.2
+matplotlib==3.10.0
