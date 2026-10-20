@@ -66,3 +66,9 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Python service caches and local credentials
+__pycache__/
+*.pyc
+.env
+.env.*

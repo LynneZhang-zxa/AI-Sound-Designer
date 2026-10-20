@@ -1,80 +1,86 @@
-# AI Sound Designer — v0.1
+# AI Sound Designer
 
-First milestone: build an AU instrument, pass Apple's AU validation, and load/play it in Logic Pro. VST3 is built alongside AU for other hosts.
+An eight-voice C++/JUCE synthesizer with AU and VST3 builds, MIDI input, editable host parameters, and asynchronous AI-assisted sound design. The producer reviews proposals, listens, and chooses what to apply.
 
-## Architecture
+The canonical repository is `/Users/zhangxiai/Desktop/AI-Sound-Designer`.
 
-- `CMakeLists.txt`: pinned JUCE 8.0.12 dependency via FetchContent, plugin identity, and AU/VST3 targets. No Projucer step. First configure requires internet access and Git. JUCE is downloaded inside the ignored build directory.
-- `plugin/Source/PluginProcessor.*`: stereo output, no audio inputs, host MIDI input, lifecycle, editor creation, and a versioned state marker.
-- `plugin/Source/PluginEditor.*`: fixed-size informational editor on the message thread. No timers or shared DSP state.
-- `plugin/Source/synth/SynthEngine.*`: eight fixed voices, sample-position MIDI dispatch, free-voice selection, and round-robin stealing when full.
-- `plugin/Source/synth/SynthVoice.*`: sine oscillator, velocity gain, and fixed ADSR. All voices produce the same signal in both output channels.
+## Implemented
 
-Voice storage exists before playback. The audio path reads existing MIDI bytes and uses stack/local arithmetic and preallocated voices, with no allocations, I/O, logging, locks, or message-thread access. Prepare/release calls require host playback to be stopped. No custom workers exist.
+- Fixed-capacity eight-voice MIDI engine with sample-position note dispatch and channel-aware note-off/all-notes-off/all-sound-off.
+- Sine, PolyBLEP saw/square, and a Nyquist-limited additive triangle waveform.
+- Per-voice ADSR; a shared resonant low-pass filter; 20 ms smoothing for cutoff, resonance, and output gain.
+- Eight stable JUCE parameter IDs, host automation, normalized controls, and versioned state restoration.
+- Separate processor, synth engine/voice, editor, background prompt worker, and external Python AI service.
+- OpenAI Responses API interpreter with strict structured output. Service-side and plugin-side validation/clamping precede JUCE host notifications. Credentials never enter the plugin or its saved state.
+- Deterministic local prompt rules for offline testing and service-failure fallback. Optional Apple on-device AI adapter.
 
-There are no editable parameters or presets yet. State writes a version marker; loading state intentionally has no audible effect because there is nothing editable to restore. MIDI note-on/off (including zero-velocity note-on), channels, all-notes-off, and all-sound-off are supported. Sustain pedal, pitch bend, modulation, MPE, and double-precision processing are not implemented. Forced voice stealing can click; improving that is a later DSP task. This is an audible host-loading scaffold, not a finished synth.
+## Build and test
 
-Keep the bundle ID and four-character manufacturer/plugin codes stable after host projects start using the plugin. Current identity: `com.aisounddesigner.synth`, manufacturer `Aisd`, plugin `Asd1`; AU type `aumu`.
-
-## Build on macOS
-
-Requirements: full Xcode with its command-line tools selected, Git, and CMake 3.22 or newer on PATH. Open Xcode once to finish its setup and accept its license if prompted. Install CMake from https://cmake.org/download/ (the macOS app includes a command-line setup option), or use `brew install cmake` if you already use Homebrew.
-
-Check prerequisites:
+Requirements: macOS, Xcode command-line tools, CMake 3.22+, Git, and internet for the first pinned JUCE 8.0.12 fetch.
 
 ```sh
-xcode-select -p
-xcrun clang++ --version
-cmake --version
-git --version
+cd /Users/zhangxiai/Desktop/AI-Sound-Designer
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target AISoundDesigner_AU AISoundDesigner_VST3 SynthTests -j 4
+ctest --test-dir build --output-on-failure
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s service -v
 ```
 
-Run from the repository root:
+Built bundles are under `build/AISoundDesigner_artefacts/Release/AU/` and `build/AISoundDesigner_artefacts/Release/VST3/`. The default generator uses `build/SynthTests`; Xcode builds may place the test executable in a configuration subdirectory. Universal builds may be requested with `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`; only native arm64 has been verified here.
+
+Quit Logic before replacing an installed bundle. Install the build into the user plugin folders:
 
 ```sh
-cmake -S . -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES=arm64
-cmake --build build --config Release --target AISoundDesigner_AU AISoundDesigner_VST3 --parallel 4
+bash scripts/install-development.sh
 ```
 
-On an Intel Mac, use `-DCMAKE_OSX_ARCHITECTURES=x86_64`. For both native and Rosetta hosts, configure with `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` instead. Build for the architecture used by your Logic process. When changing generators, use a separate build directory.
+Development bundles use ad-hoc signatures. The install script excludes Finder/iCloud metadata, refreshes and strictly verifies both installed signatures, and runs `auval`; generated bundles on an iCloud-synced Desktop can reacquire cosmetic metadata after a build. Distribution signing/notarization is outside this milestone. Keep bundle ID `com.aisounddesigner.synth`, manufacturer `Aisd`, and plugin code `Asd1` stable.
 
-Expected bundles:
+## OpenAI service
 
-```text
-build/AISoundDesigner_artefacts/Release/AU/AI Sound Designer.component
-build/AISoundDesigner_artefacts/Release/VST3/AI Sound Designer.vst3
-```
-
-Builds do not automatically install plugins. Quit Logic before installing or replacing the AU. These commands install into your user's plugin folders; repeat after each rebuild:
+The Python service uses the standard library; no framework installation is required. It listens only on loopback. Set `OPENAI_API_KEY` in the service terminal environment, using a secure local entry mechanism rather than adding it to a source file, command history, or plugin project. Then run:
 
 ```sh
-mkdir -p "$HOME/Library/Audio/Plug-Ins/Components" "$HOME/Library/Audio/Plug-Ins/VST3"
-ditto "build/AISoundDesigner_artefacts/Release/AU/AI Sound Designer.component" "$HOME/Library/Audio/Plug-Ins/Components/AI Sound Designer.component"
-ditto "build/AISoundDesigner_artefacts/Release/VST3/AI Sound Designer.vst3" "$HOME/Library/Audio/Plug-Ins/VST3/AI Sound Designer.vst3"
+cd /Users/zhangxiai/Desktop/AI-Sound-Designer
+python3 service/server.py --provider openai
 ```
 
-These instructions are for local development. Distribution signing/notarization is outside this milestone.
+`OPENAI_MODEL` optionally selects a compatible model; the configurable initial default is `gpt-4o-mini`. The service calls `https://api.openai.com/v1/responses` with a strict JSON schema and `store: false`. It sends only the producer prompt and eight parameter values, never audio. Model access, API billing, and credentials belong to the service environment. [Official Structured Outputs documentation](https://developers.openai.com/api/docs/guides/structured-outputs).
 
-## Validate and load in Logic
+In the plugin, enable **Use AI service (prompt + parameters)**, enter a prompt, and click **Propose**. Inspect the clamped parameter proposal and click **Apply proposal**. Changes use JUCE parameter gestures and host notifications; all controls remain editable. Disable AI mode to use the local rule baseline. Connection/provider failures automatically produce a clearly identified rule fallback. Malformed successful responses are rejected. Unsupported local-rule prompts propose no changes.
 
-1. After installing, list registered AUs and validate this instrument:
+Example prompts: “darker”, “shorter”, “warmer”, “brighter”, or “darker and shorter while preserving attack”. Local rules deliberately recognize only the simple terms and do not understand general language or negation. The AI mode is intended for broader phrasing; it still requires human review.
 
-   ```sh
-   auval -a
-   auval -v aumu Asd1 Aisd
-   ```
+The service request has a bounded response size, provider timeout, and no automatic paid retries. The editor can cancel its worker's network stream when closing. A proposal reflects the parameter snapshot at submission; inspect it if you edited controls while waiting.
 
-   Look for AI Sound Designer in the list and `AU VALIDATION SUCCEEDED` from validation. If the AU is not listed, restart the Mac and retry before changing anything else.
+For an optional credential-free model on a compatible Mac with Apple Intelligence enabled:
 
-2. Open Logic Pro → Settings → Plug-in Manager. Find **AI Sound Designer** under manufacturer **AI Sound Designer**. Confirm validation passed and Use is enabled. If listed but unavailable or previously failed, select it and choose **Reset & Rescan Selection**; inspect the validation output if it still fails.
-3. Create a **Software Instrument** track. In its **Instrument** slot choose **AU Instruments → AI Sound Designer → AI Sound Designer → Stereo**. Logic uses the AU build; the VST3 build is for VST3 hosts.
-4. Confirm the editor opens. Play MIDI notes or open Musical Typing with Command-K. Confirm quiet sine tones, chords, and a short release after note-off.
-5. Stop playback, close/reopen the editor, save/reopen the Logic project, and verify it still loads and plays. Try 44.1 and 48 kHz projects and repeated transport start/stop. Check silence after notes release.
+```sh
+cmake --build build --target LocalAIModel
+python3 service/server.py --provider apple
+```
 
-The milestone is complete only after AU validation and this Logic loading/playback check pass.
+The helper requires macOS 26+ and a suitable Xcode SDK; the core plugin does not depend on it. With either live service running, `build/SynthTests --service` exercises the actual C++ worker → HTTP → model → validation → JUCE update path while rendering continues. A fallback fails this live-model test rather than being counted as AI success.
 
-References: [JUCE CMake API](https://github.com/juce-framework/JUCE/blob/8.0.12/docs/CMake%20API.md), [Apple Plug-in Manager guide](https://support.apple.com/en-au/guide/logicpro/lgcp9e26ef17/mac), [Apple missing-plugin troubleshooting](https://support.apple.com/en-ca/122179).
+## Parameters
 
-## Verification status
+| Stable ID | Native range | Default |
+| --- | --- | --- |
+| `waveform` | 0 sine, 1 saw, 2 square, 3 triangle | 0 |
+| `attack` | 0.001–5 s | 0.005 |
+| `decay` | 0.005–5 s | 0.1 |
+| `sustain` | 0–1 | 0.8 |
+| `release` | 0.005–8 s | 0.15 |
+| `cutoff` | 20–20,000 Hz | 12,000 |
+| `resonance` | 0.5–2 Q | 0.707 |
+| `gain` | 0–1 | 0.8 |
 
-Scaffold source reviewed and whitespace checked. Configure was attempted in the initial environment but stopped at `cmake: command not found`. Neither compilation, AU validation, nor loading in Logic has been verified yet.
+Time and frequency controls have skewed normalization. DSP cutoff is capped at 45% of the host sample rate. Notes at or above 49% of sample rate are suppressed. XML state version 2 contains only synth parameters; prompts, service selection, credentials, active notes, and filter history are excluded. Invalid/incomplete state is ignored. The original version-1 marker contained no editable values and remains a no-op when loaded.
+
+## Verification and remaining host checks
+
+See [verification notes](docs/verification.md) for evidence and the Logic checklist, and [architecture](docs/architecture.md) for thread ownership and real-time constraints.
+
+AU/VST3 compilation, automated processor tests, service tests, Apple AU validation, and an actual local Apple-model integration test have passed. Live OpenAI inference and AI-driven parameter changes in Logic have also passed through the user-configured service. State restoration after a full Logic quit/relaunch also passed. On 2026-10-20, the user manually verified MIDI-driven audio and recorded parameter automation during playback in Logic, and confirmed state restoration and live OpenAI changes. The four core Logic acceptance checks are complete. The keyboard-focus correction has been rebuilt, installed with Logic closed, and AU-validated; a direct typing check and the extended regression checklist remain separate follow-up checks.
+
+Known limitations: dual-mono stereo output, no sustain pedal/pitch bend/MPE, no effects beyond the low-pass filter, block-level parameter snapshots, immediate waveform changes, and round-robin voice stealing that can click. Callback allocation instrumentation observes C++ `new` calls in the tested render path; it does not replace a system-wide allocator/lock profiler. Host CPU usage and perceptual quality have not been measured.

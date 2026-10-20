@@ -46,4 +46,10 @@ void SynthEngine::render(juce::AudioBuffer<float>& buffer, const juce::MidiBuffe
         }
     }
     renderVoices(buffer, cursor, buffer.getNumSamples() - cursor);
+    for (int i=0; i<buffer.getNumSamples(); ++i) {
+        filter.setCutoffFrequency(cutoff.getNextValue());
+        filter.setResonance(resonance.getNextValue());
+        const float value=filter.processSample(0,buffer.getSample(0,i))*gain.getNextValue();
+        for (int ch=0; ch<buffer.getNumChannels(); ++ch) buffer.setSample(ch,i,value);
+    }
 }

@@ -11,13 +11,15 @@ void SynthVoice::prepare(double rate)
 
 void SynthVoice::startNote(int note, int channel, float velocity)
 {
+    const auto frequency=juce::MidiMessage::getMidiNoteInHertz(note);
+    // Suppress notes above the usable band at low host sample rates.
+    if (frequency >= sampleRate*.49) { stopNote(false); return; }
     noteNumber = note;
     midiChannel = channel;
     phase = 0.0;
-    phaseIncrement = juce::MathConstants<double>::twoPi
-        * juce::MidiMessage::getMidiNoteInHertz(note) / sampleRate;
-    // Eight full-velocity voices sum to at most 0.8 before host processing.
-    level = velocity * 0.1f;
+    phaseIncrement = frequency / sampleRate;
+    // Reserve headroom for eight voices and the resonant low-pass filter.
+    level = velocity * 0.05f;
     envelope.reset();
     envelope.noteOn();
 }
@@ -42,11 +44,26 @@ void SynthVoice::renderNextBlock(juce::AudioBuffer<float>& buffer,
 
     for (int sample = startSample; sample < startSample + numSamples; ++sample)
     {
-        const auto value = static_cast<float>(std::sin(phase))
-            * level * envelope.getNextSample();
+        // PolyBLEP cancels discontinuities in saw and pulse waveforms.
+        const auto blep = [dt=phaseIncrement](double t) {
+            if (t < dt) { t /= dt; return t+t-t*t-1.0; }
+            if (t > 1.0-dt) { t=(t-1.0)/dt; return t*t+t+t+1.0; }
+            return 0.0;
+        };
+        double wave = std::sin(juce::MathConstants<double>::twoPi * phase);
+        if (waveform == 1) wave = 2.0*phase-1.0-blep(phase);
+        if (waveform == 2) wave = (phase < .5 ? 1.0 : -1.0)+blep(phase)-blep(std::fmod(phase+.5,1.0));
+        // Finite odd-harmonic series stays below Nyquist.
+        if (waveform == 3) {
+            wave=0;
+            for (int k=1; k<=31 && k*phaseIncrement < .5; k+=2)
+                wave += ((k%4==1) ? 1.0 : -1.0)*std::sin(k*juce::MathConstants<double>::twoPi*phase)/(k*k);
+            wave *= 8.0/(juce::MathConstants<double>::pi*juce::MathConstants<double>::pi);
+        }
+        const auto value = static_cast<float>(wave) * level * envelope.getNextSample();
         phase += phaseIncrement;
-        if (phase >= juce::MathConstants<double>::twoPi)
-            phase -= juce::MathConstants<double>::twoPi;
+        if (phase >= 1.0)
+            phase -= 1.0;
 
         for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
             buffer.addSample(channel, sample, value);
