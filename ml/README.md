@@ -106,3 +106,47 @@ The existing dataset/run directories are never overwritten. The evaluation uses 
 - Latency: actual CPU batch-one forward timing on a validation example, explicitly excluding feature extraction and file I/O. No real-time or deployment claim.
 
 After this first evaluation and control, stop for user review. No hyperparameter search, harder dataset, extra model, or plugin integration is part of this run.
+
+## Second experiment: pitch and velocity robustness
+
+The fixed-pitch first experiment and its measured results above are preserved. The separate second experiment varies pitch and velocity with the same saw waveform, three targets, restricted ranges, CNN architecture, training settings and baseline algorithms. This work is still fully offline and does not change the installed synth or AI prompt service.
+
+Read `PITCH_VELOCITY_PROTOCOL.md` for the frozen split and performance sampling protocol. The 300 test examples comprise 150 new examples at seen pitches and 150 at pitches absent from both training and validation. Pitch and velocity are Python-owned manifest specifications, C++ returns their actual MIDI readbacks, and neither becomes a CNN input. Only train-derived log-mel statistics are fitted. Subgroup evaluation reuses the single test prediction pass.
+
+Reproduce once into fresh directories, from the canonical repository with the existing ML environment:
+
+```sh
+cmake --build build --target DatasetRenderer -j 4
+OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 \
+  ml/.venv/bin/python -u ml/run_pitch_velocity.py --name pitch_velocity_reproduction
+```
+
+The runner tests first, renders/inspects 100 varied-performance examples, then generates the 3,000-example dataset, audits preprocessing, fits both baselines, trains the CNN/control, evaluates once and writes a measured report. Existing output directories are refused. `--smoke-only` stops after inspection. Each run records seed, rendering/feature configuration, JUCE specification, Git commit/working-tree source hashes and dependencies. For standalone stages, `prepare_experiment.py` accepts `--config ml/pitch_velocity_config.json`; training/evaluation accept `--data` and `--run`. Do not rerun evaluation on a reported run; the exclusive marker deliberately prevents that.
+
+Results: `PITCH_VELOCITY_RESULTS.md`. Audio/manifests/features: `ml/data/pitch_velocity_3000/`. Checkpoints, baseline tables, full metrics, cached per-example predictions and subgroup mappings: `ml/runs/pitch_velocity/`. No additional experiment or model integration follows the report automatically.
+
+## Offline WAV analyzer (CNN cutoff + DSP envelope)
+
+`analyze_wav.py` loads the existing selected CNN and frozen DSP calibration. It estimates cutoff with the CNN and attack/release with DSP, and writes an HTML report, absolute-amplitude waveform/RMS-envelope plot, JSON predictions for all three methods, input hash and artifact provenance. No training or plugin integration occurs.
+
+Supported input is deliberately narrow: four-second, 48 kHz mono PCM24 saw-wave renders with note-on at 0.1 s and note-off at 1.5 s, matching `pitch_velocity_config.json`. There is no resampling, trimming, peak normalization or automatic pitch/waveform recognition. Silence, clipping, incorrect duration/rate/channels, early signal and truncated tails are rejected. Passing those checks does not establish that an arbitrary recording belongs to the training distribution. The model remains limited to the tested ranges/settings.
+
+From the canonical repository:
+
+```sh
+OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 \
+  ml/.venv/bin/python ml/analyze_wav.py \
+  ml/data/pitch_velocity_3000/audio/sample_0019.wav \
+  --output ml/runs/my_wav_analysis
+```
+
+Open `ml/runs/my_wav_analysis/index.html` in a browser. Use a fresh output directory each time. JSON physical values use Hz and seconds; the visible report converts attack/release to milliseconds. `analysis_ms` is one measured offline analysis call including features, standardization, CNN and DSP; it excludes model/WAV loading and report rendering, and is not a latency benchmark or real-time claim.
+
+The actual demo is saved in `ml/runs/wav_analysis_demo/`. The fixed hybrid was measured on all 300 validation examples only using `validate_hybrid.py`, without fitting anything or opening test tensors. Results, including all methods' MAE/RMSE, are in `HYBRID_VALIDATION_RESULTS.md`; per-example arrays are in `ml/runs/hybrid_validation/validation_predictions.npz`. These are development validation results, not an independent test claim. The CNN has slightly lower validation release error, while the fixed hybrid has lower overall normalized MSE. The policy was not changed after seeing validation results.
+
+```sh
+# Optional independent reproduction of validation measurement; use a new output.
+ml/.venv/bin/python ml/validate_hybrid.py --output ml/runs/hybrid_validation_reproduction
+```
+
+No networking, model loading, PyTorch or inference was added to the JUCE audio thread. The existing prompt assistant and installed plugin are unchanged.

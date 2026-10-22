@@ -3,7 +3,7 @@
 
 AISoundDesignerProcessor::AISoundDesignerProcessor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      parameters(*this,nullptr,"AISoundDesignerState",createParameters())
+      parameters(*this,nullptr,"AISoundDesignerState",createParameters())               // JUCE parameter state
 {
     const char* ids[]={"waveform","attack","decay","sustain","release","cutoff","resonance","gain"};
     for (size_t i=0;i<values.size();++i) values[i]=parameters.getRawParameterValue(ids[i]);

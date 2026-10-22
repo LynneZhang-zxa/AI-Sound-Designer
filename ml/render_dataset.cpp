@@ -86,9 +86,9 @@ void render(AISoundDesignerProcessor& processor, juce::var manifest, const juce:
     const int warmup=static_cast<int>(std::llround(number(config["warmup_seconds"])*rate));
     const int on=static_cast<int>(std::llround(number(config["note_on_seconds"])*rate));
     const int off=static_cast<int>(std::llround(number(config["note_off_seconds"])*rate));
-    const int note=integer(config["midi_note"]);
-    const auto velocity=number(config["velocity"]);
-    check(on>=0 && off>on && off<frames && warmup>=static_cast<int>(.02*rate) && warmup<=rate && note<=127 && velocity>0 && velocity<=1,
+    const int defaultNote=integer(config["midi_note"]);
+    const auto defaultVelocity=number(config["velocity"]);
+    check(on>=0 && off>on && off<frames && warmup>=static_cast<int>(.02*rate) && warmup<=rate && defaultNote<=127 && defaultVelocity>0 && defaultVelocity<=1,
           "Invalid MIDI or warm-up configuration");
     check(integer(config["wav_bits"])==24,"Only PCM24 output is supported");
     // Keep owning var alive: array storage belongs to this local copy.
@@ -102,6 +102,13 @@ void render(AISoundDesignerProcessor& processor, juce::var manifest, const juce:
         const auto id=row["id"].toString();
         check(id.isNotEmpty() && id.containsOnly("abcdefghijklmnopqrstuvwxyz0123456789_") && ids.insert(id).second,"Unsafe or duplicate example ID");
         check(row["split"]==juce::var("train") || row["split"]==juce::var("validation") || row["split"]==juce::var("test"),"Unknown split");
+        // Python owns exact performance specifications and group assignment too.
+        const auto performance=row["requested_performance"];
+        check(performance.isVoid() || (performance.getDynamicObject()!=nullptr
+              && performance.getDynamicObject()->getProperties().size()==2),"Invalid performance object");
+        const int note=performance.isVoid() ? defaultNote : integer(performance["midi_note"]);
+        const auto velocity=performance.isVoid() ? defaultVelocity : number(performance["velocity"]);
+        check(note<=127 && velocity>0 && velocity<=1,"Invalid per-example MIDI performance");
         const auto requested=row["requested_parameters"];
         check(requested.getDynamicObject()!=nullptr && requested.getDynamicObject()->getProperties().size()==processor.getParameters().size(),"Incomplete parameter vector");
         for (const auto& item:requested.getDynamicObject()->getProperties()) {
@@ -150,6 +157,7 @@ void render(AISoundDesignerProcessor& processor, juce::var manifest, const juce:
         auto receipt=object();
         put(receipt,"id",id); put(receipt,"split",row["split"]);
         put(receipt,"applied_parameters",applied); put(receipt,"targets",targets); put(receipt,"normalized_targets",normalized); put(receipt,"audio",audioPath);
+        put(receipt,"midi_note",note);
         put(receipt,"midi_velocity_7bit",juce::MidiMessage::noteOn(1,note,static_cast<float>(velocity)).getVelocity());
         receipts.add(receipt);
     }

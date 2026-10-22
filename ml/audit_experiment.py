@@ -1,4 +1,5 @@
 """Pre-training input-path and training-only preprocessing audit."""
+import argparse
 import json
 from pathlib import Path
 import numpy as np
@@ -23,10 +24,10 @@ def audit(directory):
         for i in indices:
             x,_=waveform_features(directory/rows[i]['audio'],cfg['renderer'],cfg['features'])
             np.testing.assert_array_equal(x,cache[i]);checks.append({'split':split,'row_index':i,'byte_exact_waveform_recomputation':True})
-    result={'status':'PASS','preprocessing_exactly_recomputed_from':'2400 training feature tensors only',
+    result={'status':'PASS','preprocessing_exactly_recomputed_from':f'{len(training)} training feature tensors only',
             'waveform_recomputations':checks,'model_forward_signature':'forward(x): tensor [B,1,64,747] only',
             'dataset_item':'(standardized_log_mel_tensor, supervised_target_tensor); only first element is passed to model',
-            'metadata_mutation_regression':'13 tests passed; metadata/filenames/target mutation leaves inputs and forward outputs unchanged',
+            'metadata_mutation_regression':'Covered by tests/test_learning.py; see separately recorded test log',
             'dsp_features':'waveform and fixed timing only; no ground-truth attack/release windows',
             'test_model_inference_performed':False,
             'audited_source_hashes':{name:sha256(ROOT/'ml'/name) for name in ['features.py','dataset.py','model.py','train.py','dsp_baseline.py','prepare_experiment.py','tests/test_learning.py']}}
@@ -34,4 +35,6 @@ def audit(directory):
     print(json.dumps(result,indent=2))
 
 
-if __name__=='__main__':audit(ROOT/'ml/data/experiment_3000')
+if __name__=='__main__':
+    parser=argparse.ArgumentParser();parser.add_argument('--data',type=Path,default=ROOT/'ml/data/experiment_3000')
+    audit(parser.parse_args().data)

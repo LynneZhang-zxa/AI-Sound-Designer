@@ -82,8 +82,18 @@ def main():
                     row.update({f'true_normalized_{target}':float(truth[i,j]),f'pred_normalized_{target}':float(pred[i,j]),
                                 f'true_physical_{target}':float(raw[i,j]),f'pred_physical_{target}':float(physical[i,j])})
                 writer.writerow(row)
+    # Grouping uses reporting sidecars only, AFTER the sole test inference pass.
+    manifest=json.loads((directory/'rendered_manifest.json').read_text())
+    by_id={r['id']:r for r in manifest['examples']}
+    groups={identifier:by_id[identifier].get('evaluation_group','fixed_pitch') for identifier in ids}
+    subgroup_scores={}
+    for group in sorted(set(groups.values())):
+        mask=np.array([groups[identifier]==group for identifier in ids])
+        subgroup_scores[group]={'examples':int(mask.sum()),'methods':{
+            name:score(pred[mask],truth[mask],raw[mask],spec) for name,pred in predictions.items()}}
+    (run/'test_groups.json').write_text(json.dumps(groups,indent=2)+'\n')
     ratio=scores['shuffled']['normalized_mse']/scores['cnn']['normalized_mse']
-    results={'test':scores,'validation':validation_scores,'offline_latency':timings,
+    results={'test':scores,'test_groups':subgroup_scores,'validation':validation_scores,'offline_latency':timings,
              'shuffled_label_sanity':{'test_mse_ratio_shuffled_over_cnn':ratio,'expected_direction_observed':ratio>1,
                                       'interpretation':'Fixed control; not a main-model candidate. No metric-dependent retraining.'},
              'test_evaluation_count_per_checkpoint':1,'run':record,

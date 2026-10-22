@@ -59,10 +59,75 @@ def make_manifest(config, spec, source_info):
                          "requested_parameters": dict(config["fixed_parameters"], **targets),
                          "requested_targets": targets,
                          "requested_normalized_targets": {k: normalize(v, k, spec) for k, v in targets.items()}})
+    if "performance_variation" in config:
+        assign_performances(examples, config)
     return {"metadata": {"schema_version": 1, "config": config, "parameter_specification": spec,
                          "provenance": source_info, "numpy_version": np.__version__,
                          "sampling_algorithm": "PCG64 stratified log-uniform, independent axis permutations"},
             "examples": examples}
+
+
+def assign_performances(examples, config):
+    """Independent RNG stream; targets/splits are unchanged by performance sampling."""
+    variation = config["performance_variation"]
+    seen, held = variation["seen_midi_notes"], variation["held_out_midi_notes"]
+    if (not seen or not held or set(seen) & set(held)
+            or len(set(seen)) != len(seen) or len(set(held)) != len(held)
+            or any(type(n) is not int or not 0 <= n <= 127 for n in seen + held)):
+        raise ValueError("Pitch pools must be valid, unique and disjoint")
+    low, high = variation["velocity_range"]
+    if not 0 < low < high <= 1:
+        raise ValueError("Invalid velocity range")
+    rng = np.random.Generator(np.random.PCG64(config["seed"] + 1))
+    tests = [r for r in examples if r["split"] == "test"]
+    count = variation["test_seen_count"]
+    if not 0 < count < len(tests):
+        raise ValueError("Test must contain both seen and held-out pitches")
+    seen_test_ids = {tests[i]["id"] for i in rng.permutation(len(tests))[:count]}
+    for split in config["split_counts"]:
+        rows = [r for r in examples if r["split"] == split]
+        for group in ("seen_pitch", "held_out_pitch"):
+            selected = [r for r in rows if ("held_out_pitch" if split == "test" and r["id"] not in seen_test_ids else "seen_pitch") == group]
+            pool = seen if group == "seen_pitch" else held
+            notes = np.resize(np.array(pool), len(selected))
+            rng.shuffle(notes)
+            for row, note in zip(selected, notes):
+                row["requested_performance"] = {"midi_note": int(note), "velocity": float(rng.uniform(low, high))}
+                row["evaluation_group"] = group
+
+
+def validate_performance_groups(manifest):
+    """Verify held-out pitch isolation and exact Python-to-JUCE MIDI readbacks."""
+    config=manifest["metadata"]["config"]
+    if "performance_variation" not in config:
+        return None
+    variation=config["performance_variation"]
+    seen=set(variation["seen_midi_notes"]); held=set(variation["held_out_midi_notes"])
+    counts={}
+    for row in manifest["examples"]:
+        group=row["evaluation_group"]; performance=row["requested_performance"]
+        if group not in ("seen_pitch","held_out_pitch"):
+            raise ValueError("Unknown evaluation group")
+        expected=held if group=="held_out_pitch" else seen
+        if performance["midi_note"] not in expected or (row["split"]!="test" and group!="seen_pitch"):
+            raise ValueError("Held-out pitch leakage or invalid pitch group")
+        if not variation["velocity_range"][0] <= performance["velocity"] <= variation["velocity_range"][1]:
+            raise ValueError("Velocity outside configured range")
+        if "midi_note" in row:
+            # JUCE receives float32 and rounds its float32 product to nearest MIDI byte.
+            encoded=int(np.floor(np.float32(np.float32(performance["velocity"])*127)+.5))
+            if row["midi_note"]!=performance["midi_note"] or row["midi_velocity_7bit"]!=encoded:
+                raise ValueError("Renderer MIDI readback mismatch")
+        key=row["split"]+"/"+group
+        counts[key]=counts.get(key,0)+1
+    expected_counts={"train/seen_pitch":config["split_counts"]["train"],
+                     "validation/seen_pitch":config["split_counts"]["validation"],
+                     "test/seen_pitch":variation["test_seen_count"],
+                     "test/held_out_pitch":config["split_counts"]["test"]-variation["test_seen_count"]}
+    if counts!=expected_counts:
+        raise ValueError("Incorrect pitch group counts")
+    return {"status":"PASS","group_counts":counts,"seen_pitches":sorted(seen),"held_out_pitches":sorted(held),
+            "pitch_and_velocity_excluded_from_model_input":True}
 
 
 def merge_receipts(manifest, receipts):

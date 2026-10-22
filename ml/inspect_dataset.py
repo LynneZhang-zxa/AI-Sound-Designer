@@ -10,6 +10,7 @@ from scipy.ndimage import uniform_filter1d
 from scipy.signal import welch
 from scipy.stats import spearmanr
 from features import log_mel
+from generate_dataset import validate_performance_groups
 from parameters import normalize, denormalize
 
 
@@ -41,6 +42,7 @@ def inspect(directory):
     records, hashes, vectors, features, targets = [], set(), set(), [], []
     counts = {name: 0 for name in cfg["split_counts"]}
     on, off = round(render["note_on_seconds"] * rate), round(render["note_off_seconds"] * rate)
+    performance_audit = validate_performance_groups(manifest)
     max_label_relative_error = 0.0
     for row in rows:
         original = requested_by_id[row["id"]]
@@ -101,7 +103,15 @@ def inspect(directory):
     correlations = {"attack_vs_rise_spearman": float(spearmanr([r["attack_seconds"] for r in records], [r["rise_10_90_seconds"] for r in records]).statistic),
                     "release_vs_fall_spearman": float(spearmanr([r["release_seconds"] for r in records], [r["fall_90_10_seconds"] for r in records]).statistic),
                     "cutoff_vs_sustain_centroid_spearman": float(spearmanr([r["cutoff_hz"] for r in records], [r["sustain_centroid_hz"] for r in records]).statistic)}
-    demand(all(value > .8 for value in correlations.values()), "Target variation insufficiently visible in audio")
+    if performance_audit is None:
+        demand(all(value > .8 for value in correlations.values()), "Target variation insufficiently visible in audio")
+    else:
+        # Pitch is now a deliberate confound for raw centroid/cutoff correlation.
+        # Record it without treating fixed-pitch monotonicity as an acceptance gate.
+        demand(correlations["attack_vs_rise_spearman"] > .8 and correlations["release_vs_fall_spearman"] > .8,
+               "Envelope targets insufficiently visible")
+        centroids=[r["sustain_centroid_hz"] for r in records]
+        demand(max(centroids)/min(centroids)>1.2,"Insufficient spectral variation")
     all_features = np.stack(features)
     training = all_features[[row["split"] == "train" for row in rows]]
     stats = {"mean_per_mel": training.mean(axis=(0, 1, 3)).tolist(), "std_per_mel": training.std(axis=(0, 1, 3)).tolist(),
@@ -116,6 +126,7 @@ def inspect(directory):
               "visibility_checks": correlations, "unique_audio_hashes": len(hashes),
               "provenance": meta["provenance"], "config": cfg, "parameter_specification": spec,
               "inspection_records": records,
+              "performance_audit": performance_audit,
               "interpretation": "Smoke visibility diagnostics, not model predictions or learned baseline performance."}
     np.savez_compressed(directory / "features.npz", inputs=all_features, targets=np.asarray(targets, dtype=np.float32),
                         ids=np.array([r["id"] for r in rows]), splits=np.array([r["split"] for r in rows]))

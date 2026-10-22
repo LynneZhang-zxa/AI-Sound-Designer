@@ -9,7 +9,7 @@ import numpy as np
 import scipy
 from dsp_baseline import measure
 from features import log_mel
-from generate_dataset import ROOT, make_manifest, merge_receipts, provenance, sha256
+from generate_dataset import ROOT, make_manifest, merge_receipts, provenance, sha256, validate_performance_groups
 from inspect_dataset import read_audio, demand
 from parameters import normalize, denormalize
 
@@ -21,9 +21,10 @@ def waveform_features(path, render_config, feature_config):
     return log_mel(audio, rate, feature_config), measure(audio, rate, render_config)
 
 
-def prepare(directory, renderer):
+def prepare(directory, renderer, config_path=None):
     directory.mkdir(parents=True, exist_ok=False)
-    config = json.loads((ROOT/"ml/experiment_config.json").read_text())
+    config_path = config_path or ROOT/"ml/experiment_config.json"
+    config = json.loads(Path(config_path).read_text())
     specfile = directory/"parameter_spec.json"
     subprocess.run([str(renderer),"--export-spec",str(specfile)],check=True)
     source = provenance()
@@ -35,9 +36,11 @@ def prepare(directory, renderer):
         subprocess.run([str(renderer),"--render",str(sourcefile),str(directory)],stdout=log,stderr=subprocess.STDOUT,check=True)
     rendered=merge_receipts(manifest,json.loads((directory/"render_receipts.json").read_text()))
     (directory/"rendered_manifest.json").write_text(json.dumps(rendered,indent=2,sort_keys=True,allow_nan=False)+'\n')
+    print("Rendering complete; validating audio and extracting features",flush=True)
+    performance_audit=validate_performance_groups(rendered)
     spec=manifest['metadata']['parameter_specification']; names=config['target_order']
     per_split={split:[r for r in rendered['examples'] if r['split']==split] for split in config['split_counts']}
-    buffers={}; peak_min,peak_max=1.,0.; hashes=set(); target_vectors=set(); frames=192000
+    buffers={}; peak_min,peak_max=1.,0.; hashes=set(); target_vectors=set(); frames=round(config["renderer"]["sample_rate"]*config["renderer"]["duration_seconds"])
     nframes=1+(frames-config['features']['n_fft'])//config['features']['hop_length']
     for split, rows in per_split.items():
         demand(len(rows)==config['split_counts'][split], 'Split count mismatch')
@@ -57,6 +60,9 @@ def prepare(directory, renderer):
             demand(0<peak<.999,'Silent or clipped audio')
             demand(np.max(np.abs(audio[:4800])) <= 2**-22, 'Audio before note-on')
             demand(np.sqrt(np.mean(audio[-9600:]**2))<1e-5,'Tail truncated')
+            performance=row.get('requested_performance',config['renderer'])
+            demand(row['midi_note']==performance['midi_note'],'MIDI pitch readback mismatch')
+            demand(row['midi_velocity_7bit']==int(np.floor(np.float32(np.float32(performance['velocity'])*127)+.5)),'MIDI velocity readback mismatch')
             for k,v in row['applied_parameters'].items():
                 demand(np.isclose(v,row['requested_parameters'][k],rtol=3e-6,atol=1e-7),'Incorrect applied parameter')
             for k in names:
@@ -77,20 +83,20 @@ def prepare(directory, renderer):
     demand(np.all(std>1e-6),'Degenerate training feature channel')
     stats={'source_split':'train','examples':len(training),'mean_per_mel':mean.tolist(),'std_per_mel':std.tolist(),'no_per_recording_peak_normalization':True}
     (directory/'preprocessing.json').write_text(json.dumps(stats,indent=2)+'\n')
-    audit={'status':'PASS','examples':3000,'split_counts':{k:len(v) for k,v in per_split.items()},'input_shape':[1,64,nframes],
+    audit={'status':'PASS','examples':config['examples'],'split_counts':{k:len(v) for k,v in per_split.items()},'input_shape':[1,64,nframes],
            'unique_audio_hashes':len(hashes),'unique_applied_targets':len(target_vectors),'peak_range':[peak_min,peak_max],
            'model_input':'waveform -> fixed log-mel -> training-feature-only standardization',
            'excluded_from_model_input':['parameter values','manifest columns','IDs','filenames','split indicators','DSP proxies'],
            'dsp_input':'waveform only; fixed timing windows, no true parameter windows',
            'preprocessing_fit_split':'train','provenance':source,'dataset_manifest_sha256':sha256(sourcefile),
-           'feature_sha256':{s:sha256(directory/f'{s}_features.npy') for s in per_split}}
+           'performance_audit':performance_audit,'feature_sha256':{s:sha256(directory/f'{s}_features.npy') for s in per_split}}
     demand(provenance()['plugin_source_sha256']==source['plugin_source_sha256'],'Plugin runtime source changed')
     (directory/'data_audit.json').write_text(json.dumps(audit,indent=2)+'\n')
     print(json.dumps({k:audit[k] for k in ['status','examples','split_counts','peak_range']},indent=2),flush=True)
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(); parser.add_argument('--output',type=Path,default=ROOT/'ml/data/experiment_3000');parser.add_argument('--renderer',type=Path,default=ROOT/'build/DatasetRenderer');args=parser.parse_args()
+    parser=argparse.ArgumentParser(); parser.add_argument('--output',type=Path,default=ROOT/'ml/data/experiment_3000');parser.add_argument('--config',type=Path,default=ROOT/'ml/experiment_config.json');parser.add_argument('--renderer',type=Path,default=ROOT/'build/DatasetRenderer');args=parser.parse_args()
     out=args.output.resolve()
     if not out.is_relative_to(ROOT): raise ValueError('Output must stay inside canonical repository')
-    prepare(out,args.renderer.resolve())
+    prepare(out,args.renderer.resolve(),args.config.resolve())
