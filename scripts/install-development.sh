@@ -1,5 +1,9 @@
 #!/bin/bash
 set -eu
+if pgrep -x "Logic Pro" >/dev/null 2>&1; then
+    echo "Quit Logic Pro normally before replacing installed plugins (save your project first)." >&2
+    exit 1
+fi
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 install_bundle() {
     local format="$1" folder="$2" extension="$3"

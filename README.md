@@ -1,86 +1,92 @@
-# AI Sound Designer
+# Resonanca — AI Sound Designer
 
-An eight-voice C++/JUCE synthesizer with AU and VST3 builds, MIDI input, editable host parameters, and asynchronous AI-assisted sound design. The producer reviews proposals, listens, and chooses what to apply.
+A macOS **C++/JUCE AU/VST3 synthesizer** with editable text-guided sound design and reference-WAV matching.
 
-The canonical repository is `/Users/zhangxiai/Desktop/AI-Sound-Designer`.
+**Describe → review → Apply → listen → Undo.** Reference matching approximates one dry note using the synth's available controls. Human review stays in control.
 
-## Implemented
+![Actual JUCE editor proposal](assets/demo/proposal.png)
 
-- Fixed-capacity eight-voice MIDI engine with sample-position note dispatch and channel-aware note-off/all-notes-off/all-sound-off.
-- Sine, PolyBLEP saw/square, and a Nyquist-limited additive triangle waveform.
-- Per-voice ADSR; a shared resonant low-pass filter; 20 ms smoothing for cutoff, resonance, and output gain.
-- Eight stable JUCE parameter IDs, host automation, normalized controls, and versioned state restoration.
-- Separate processor, synth engine/voice, editor, background prompt worker, and external Python AI service.
-- OpenAI Responses API interpreter with strict structured output. Service-side and plugin-side validation/clamping precede JUCE host notifications. Credentials never enter the plugin or its saved state.
-- Deterministic local prompt rules for offline testing and service-failure fallback. Optional Apple on-device AI adapter.
+[16-second audio/video demonstration](assets/demo/resonanca-demo.mp4) · [Quick start](docs/quick-start.md) · [Architecture](docs/architecture.md) · [Release evidence and limits](docs/release-status.md)
 
-## Build and test
+The demonstration is assembled from actual test-editor snapshots and actual JUCE renders; it is labeled as an offline staged demonstration, not a Logic screen recording. Local rules are used in that video.
 
-Requirements: macOS, Xcode command-line tools, CMake 3.22+, Git, and internet for the first pinned JUCE 8.0.12 fetch.
+## What works
+
+- Eight fixed-capacity voices, MIDI input, sine/saw/square/triangle, ADSR and a low-pass filter.
+- Stable JUCE parameters, host automation and persistent synth state.
+- Resizable proportional editor, with screen-aware initial size and a corner grip.
+- Coordinated text proposals across the eight controls, strength selection, before/after review and one-step Undo. Manual/host edits invalidate stale proposals.
+- Optional OpenAI structured interpretation through an external loopback Python service; clearly labeled deterministic local fallback.
+- Background measurements and paired-render comparisons of the current synth patch.
+- Reference WAV → bounded actual-JUCE render/search → seven editable timbral controls. Output gain is preserved. Internal spectrogram/envelope diagnostics are saved, not added to the plugin UI.
+
+## Build and install
+
+Validated on Apple Silicon/macOS with AppleClang, CMake 3.22+, JUCE **8.0.12**, AU and VST3. JUCE is pinned and fetched by CMake. Xcode command-line tools and network access for the first fetch are required. Intel/macOS builds are not claimed verified.
 
 ```sh
-cd /Users/zhangxiai/Desktop/AI-Sound-Designer
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target AISoundDesigner_AU AISoundDesigner_VST3 SynthTests -j 4
+cmake --build build --target AISoundDesigner_AU AISoundDesigner_VST3 DatasetRenderer SynthTests EditorTests -j4
 ctest --test-dir build --output-on-failure
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s service -v
 ```
 
-Built bundles are under `build/AISoundDesigner_artefacts/Release/AU/` and `build/AISoundDesigner_artefacts/Release/VST3/`. The default generator uses `build/SynthTests`; Xcode builds may place the test executable in a configuration subdirectory. Universal builds may be requested with `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`; only native arm64 has been verified here.
-
-Quit Logic before replacing an installed bundle. Install the build into the user plugin folders:
+Save and normally quit Logic before installing:
 
 ```sh
 bash scripts/install-development.sh
 ```
 
-Development bundles use ad-hoc signatures. The install script excludes Finder/iCloud metadata, refreshes and strictly verifies both installed signatures, and runs `auval`; generated bundles on an iCloud-synced Desktop can reacquire cosmetic metadata after a build. Distribution signing/notarization is outside this milestone. Keep bundle ID `com.aisounddesigner.synth`, manufacturer `Aisd`, and plugin code `Asd1` stable.
+The installer refuses to replace a loaded plugin, verifies installed signatures and runs `auval`. It installs development/ad-hoc signed AU/VST3 into your user Library. It is not a notarized distribution installer. Reopen Logic and insert **AU Instruments → AI Sound Designer → AI Sound Designer → Stereo**.
 
-## OpenAI service
+## Optional analysis and AI services
 
-The Python service uses the standard library; no framework installation is required. It listens only on loopback. Set `OPENAI_API_KEY` in the service terminal environment, using a secure local entry mechanism rather than adding it to a source file, command history, or plugin project. Then run:
-
-```sh
-cd /Users/zhangxiai/Desktop/AI-Sound-Designer
-python3 service/server.py --provider openai
-```
-
-`OPENAI_MODEL` optionally selects a compatible model; the configurable initial default is `gpt-4o-mini`. The service calls `https://api.openai.com/v1/responses` with a strict JSON schema and `store: false`. It sends only the producer prompt and eight parameter values, never audio. Model access, API billing, and credentials belong to the service environment. [Official Structured Outputs documentation](https://developers.openai.com/api/docs/guides/structured-outputs).
-
-In the plugin, enable **Use AI service (prompt + parameters)**, enter a prompt, and click **Propose**. Inspect the clamped parameter proposal and click **Apply proposal**. Changes use JUCE parameter gestures and host notifications; all controls remain editable. Disable AI mode to use the local rule baseline. Connection/provider failures automatically produce a clearly identified rule fallback. Malformed successful responses are rejected. Unsupported local-rule prompts propose no changes.
-
-Example prompts: “darker”, “shorter”, “warmer”, “brighter”, or “darker and shorter while preserving attack”. Local rules deliberately recognize only the simple terms and do not understand general language or negation. The AI mode is intended for broader phrasing; it still requires human review.
-
-The service request has a bounded response size, provider timeout, and no automatic paid retries. The editor can cancel its worker's network stream when closing. A proposal reflects the parameter snapshot at submission; inspect it if you edited controls while waiting.
-
-For an optional credential-free model on a compatible Mac with Apple Intelligence enabled:
+Basic synthesis and local text rules need no Python service. For Analyze/Match, use **Python 3.12** (tested 3.12.9):
 
 ```sh
-cmake --build build --target LocalAIModel
-python3 service/server.py --provider apple
+python3.12 -m venv ml/.venv
+ml/.venv/bin/python -m pip install -r ml/training-requirements.txt
+bash scripts/start-assistant.sh
 ```
 
-The helper requires macOS 26+ and a suitable Xcode SDK; the core plugin does not depend on it. With either live service running, `build/SynthTests --service` exercises the actual C++ worker → HTTP → model → validation → JUCE update path while rendering continues. A fallback fails this live-model test rather than being counted as AI success.
+The current external analysis process imports PyTorch even though default Match uses DSP search. No trained checkpoint or 3,000-example dataset is required for current Match/measurements; absent optional historical models are reported as unavailable. Large datasets/checkpoints are generated artifacts excluded from Git.
 
-## Parameters
+For Live AI, securely export `OPENAI_API_KEY` in the service terminal before starting that command. Keep that terminal open. Never paste keys into chat, source, plugin prompts or project state. `OPENAI_MODEL` optionally overrides the existing `gpt-4o-mini` default. Calls may incur provider charges. A changed AI worker can be explicitly replaced with `bash scripts/start-assistant.sh --restart-ai` in the same key-configured environment.
 
-| Stable ID | Native range | Default |
-| --- | --- | --- |
-| `waveform` | 0 sine, 1 saw, 2 square, 3 triangle | 0 |
-| `attack` | 0.001–5 s | 0.005 |
-| `decay` | 0.005–5 s | 0.1 |
-| `sustain` | 0–1 | 0.8 |
-| `release` | 0.005–8 s | 0.15 |
-| `cutoff` | 20–20,000 Hz | 12,000 |
-| `resonance` | 0.5–2 Q | 0.707 |
-| `gain` | 0–1 | 0.8 |
+Services bind to `127.0.0.1`: prompt **8765**, analysis **8766**. Native-plugin requests carry structured parameters, not DAW audio. Reference audio/path is never sent to OpenAI. The Responses request uses strict structured output and `store:false`; see [official Structured Outputs documentation](https://developers.openai.com/api/docs/guides/structured-outputs).
 
-Time and frequency controls have skewed normalization. DSP cutoff is capped at 45% of the host sample rate. Notes at or above 49% of sample rate are suppressed. XML state version 2 contains only synth parameters; prompts, service selection, credentials, active notes, and filter history are excluded. Invalid/incomplete state is ignored. The original version-1 marker contained no editable values and remains a no-op when loaded.
+## Use the plugin
 
-## Verification and remaining host checks
+- **Propose changes:** try `更暖、更柔和，保留尾音` at Medium with Live AI off, or enable Live AI for broader language. Review the numbers and reasons before Apply. Undo restores the prior patch unless a newer manual/host change has occurred.
+- **Analyze sound:** measures a standardized background MIDI-48 render of the current patch. It does not capture live audio or analyze the imported WAV. Progress and completed RMS/peak/centroid appear in the main status.
+- **Match reference WAV:** select a dry isolated note, include its release tail, enter its known MIDI gate duration (note-on to note-off, **not file duration**) and use Auto pitch or a known note. Review, Apply and audition at the displayed pitch; Undo is available.
+- **Resize:** drag the bottom-right diagonal grip. Logical size limits are 720×660 to 1440×1320; all sections scale together. UI size/conversation history are not part of saved synth parameters.
 
-See [verification notes](docs/verification.md) for evidence and the Logic checklist, and [architecture](docs/architecture.md) for thread ownership and real-time constraints.
+## Real-time boundary
 
-AU/VST3 compilation, automated processor tests, service tests, Apple AU validation, and an actual local Apple-model integration test have passed. Live OpenAI inference and AI-driven parameter changes in Logic have also passed through the user-configured service. State restoration after a full Logic quit/relaunch also passed. On 2026-10-20, the user manually verified MIDI-driven audio and recorded parameter automation during playback in Logic, and confirmed state restoration and live OpenAI changes. The four core Logic acceptance checks are complete. The keyboard-focus correction has been rebuilt, installed with Logic closed, and AU-validated; a direct typing check and the extended regression checklist remain separate follow-up checks.
+The audio callback uses fixed eight-voice storage, cached atomic parameter reads and prepared DSP. Networking, Python, rendering subprocesses, feature extraction, file I/O and model work stay outside it. Apply uses JUCE host gestures on the message thread. Allocation checks cover exercised C++ `new` calls, not a system-wide allocator/lock proof. [Architecture and ownership](docs/architecture.md).
 
-Known limitations: dual-mono stereo output, no sustain pedal/pitch bend/MPE, no effects beyond the low-pass filter, block-level parameter snapshots, immediate waveform changes, and round-robin voice stealing that can click. Callback allocation instrumentation observes C++ `new` calls in the tested render path; it does not replace a system-wide allocator/lock profiler. Host CPU usage and perceptual quality have not been measured.
+## ML results and engineering decision
+
+The new controlled experiment generated **3,000 exact JUCE-labeled examples**, with train-only preprocessing, held-out test data, mean/DSP baselines and a shuffled-label control. A small PyTorch CNN predicts six continuous controls plus waveform; its test waveform accuracy was **95%**.
+
+Under an equal **96 actual renders/reference**, CNN-seeded and DSP searches tied on all **16 synth + 8 independent** cases. The CNN is therefore **not deployed in default Match**. Parameter prediction improvement did not improve final reconstruction. Full physical-unit errors, unfavorable results and timing scope are retained in [MATCH_MODEL_RESULTS.md](ml/MATCH_MODEL_RESULTS.md), with a [frozen protocol](ml/MATCH_MODEL_PROTOCOL.md).
+
+## Verification
+
+```sh
+bash scripts/check-release.sh
+```
+
+Default checks make no paid API calls. `bash scripts/check-release.sh --live` explicitly adds real OpenAI acceptance and requires the running key-configured service. Tests build actual processor/editor/renderer targets and exercise serialization, MIDI, DSP rates/blocks, proposal protections, resizing/input, HTTP contracts, pending-worker cancellation, features and Match boundaries.
+
+One legacy browser-workbench test needs its historical checkpoint and explicitly skips when absent; core Match/Analyze remain testable without it. `ML_SKIP_LEGACY_MODEL_TESTS=1 bash scripts/check-release.sh` also exercises that model-absent analysis path. Old workbench tools remain optional.
+
+Reproducible release reference checks: `ml/.venv/bin/python scripts/release-acceptance.py`. They save nine technical reference results and an audition page under `ml/runs/release_acceptance/`; the command refuses to overwrite an existing run. This is a controlled functional matrix, not a human listening score or arbitrary-recording benchmark.
+
+## Limits
+
+Match targets dry, stable, near-equal-tempered **single notes**, MIDI 36–84, 0.2–8-second WAVs and a known gate of 150–3000 ms. Chords, changing pitch, reverb, full songs and complex external synth topologies are outside its validated scope. Spectral/envelope distances are technical measures, not perceived similarity. Sine waves have little harmonic brightness to remove.
+
+The synth has dual-mono output and no unison, stereo width, reverb, sustain-pedal/pitch-bend/MPE implementation. Waveform changes and voice stealing can click. Host CPU profiling, broad perceptual preference and distribution notarization are not claimed. The assistant reports unsupported requests rather than inventing effects.
+
+No commits or pushes are performed by the assistant; repository review and Git publication remain with the project owner.

@@ -1,6 +1,6 @@
 # Offline synth-parameter experiments
 
-This directory is separate from the verified v0.1 plugin. It contains the approved smoke pipeline and first controlled 3,000-example offline experiment. The only prediction targets are cutoff, attack and release. There is no plugin inference integration, ONNX export, networking, or pitch/waveform/velocity variation.
+This directory keeps offline data generation and PyTorch training separate from the verified JUCE audio callback. The original fixed-saw experiment, pitch/velocity follow-up, and expanded-domain initializer use separate datasets and run directories. The initializer additionally classifies waveform while predicting cutoff, attack and release; it is not deployed into the plugin. Local analysis/reference-search services are separate background processes.
 
 ## Ownership and data flow
 
@@ -150,3 +150,83 @@ ml/.venv/bin/python ml/validate_hybrid.py --output ml/runs/hybrid_validation_rep
 ```
 
 No networking, model loading, PyTorch or inference was added to the JUCE audio thread. The existing prompt assistant and installed plugin are unchanged.
+
+## Offline analyze → propose → review → render loop
+
+`offline_design.py` combines the existing analyzer, loopback AI service, deterministic rule fallback and standalone JUCE renderer. It does not modify the plugin, retrain a model or infer on held-out test tensors. It supports only the existing three targets and experimental audio conditions. MIDI note/velocity must be supplied as known performance information; they are not inferred from the recording. Non-target synth settings remain fixed.
+
+First create a reviewable proposal (the example below is the same validation WAV used in the analyzer demo):
+
+```sh
+OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 \
+  ml/.venv/bin/python ml/offline_design.py propose \
+  ml/data/pitch_velocity_3000/audio/sample_0019.wav \
+  --midi-note 48 --velocity 0.9814434784793344 \
+  --prompt 'Make this darker and shorter; preserve the attack.' \
+  --output ml/runs/my_sound_design
+```
+
+Open `ml/runs/my_sound_design/index.html`. It provides original/reconstructed audio players, estimated-before/proposed-after parameters, known MIDI information, proposal source and reconstruction log-mel RMSE. Compare original against the reconstruction first: modifying estimated parameters resynthesizes a new sound, it does not directly process the original waveform. Log-mel RMSE is a technical difference metric, not a listening-preference score.
+
+The tool sends only the prompt and eight-value parameter snapshot (not audio) to the existing `http://127.0.0.1:8765/propose` service on a standalone Python background worker. Start the existing OpenAI-backed service as documented in the root README; no key belongs in this tool, proposal or repository. Service errors/invalid responses fall back to local rules, visibly labeled. `--local-only` skips networking. English darker/warmer/brighter/shorter/longer and basic Chinese 暗/暖/亮/短/长 are supported by the deliberately simple fallback; it is not a general language interpreter.
+
+Review first, then use the exact apply command printed in the HTML report. Its `--approve-sha256` binds application to the reviewed proposal bytes. Applying validates parameters, input/reconstruction hashes and renderer identity, then renders `modified/audio/render.wav`, verifies JUCE readbacks, and adds a third audio player. Repeated application and overwrites are refused. All target suggestions are clamped to the intersection of exported JUCE ranges and the restricted experimental ranges; other known parameter suggestions are ignored and recorded. Unknown/nonnumeric/nonfinite service parameters trigger fallback.
+
+Artifacts include immutable `proposal.json`, copied `original.wav`, reconstruction audio/manifests/readbacks, and, after application, modified audio plus `applied.json`. No model, filesystem/network work or Python is added to the plugin audio thread. The HTML is a static review report; application uses the copied Terminal command, not an active web-server button.
+
+Actual demonstration: `ml/runs/offline_design_demo/index.html` (subsequently applied on user instruction; original/reconstruction/modified players are available). The unavailable local service caused a visibly labeled rules fallback. Original vs estimated reconstruction full-recording log-mel RMSE was 0.5592419492700359. Proposed cutoff 5397.43659935218 → 3238.4619596113075 Hz; release 0.31651953714234443 → 0.18991172228540665 s; attack unchanged. This is one validation example, not a new generalization metric. The complete propose/apply render path was exercised separately by the automated integration test; see `build/offline-design-tests.log` (20 tests passed).
+
+### Proposal strength
+
+The `propose` command accepts `--strength subtle|medium|strong` (轻微 / 适中 / 明显); default `medium` preserves the original change amount. This is currently a CLI option, displayed in the static report, not an interactive browser selector. Example: add `--strength strong --local-only` and use a new `--output` directory.
+
+Strength scales the proposed ratio in log space: `after = before * (base_proposed / before)^factor`, with factors 0.5, 1.0 and 2.5. Frequency/time ratios are scaled consistently; unchanged parameters remain unchanged. Final values are clamped to exported JUCE and experimental bounds. The immutable proposal records the original suggestion, selected strength, factor and final values. The existing SHA-256 review/apply flow is unchanged. No model retraining or plugin parameter changes are involved.
+
+The strong demo proposal is `ml/runs/offline_design_strong/index.html`: cutoff 5397.43659935218 → 1505.1011084281 Hz, release 0.31651953714234443 → 0.08826299251931376 s, attack unchanged. This demo explicitly used local rules. It was subsequently applied on user instruction, and its modified audio is available. Existing applied medium demo is preserved. Intensity ordering, direction, bounds and preserved-attack checks are included in the 21 passing ML tests (`build/strength-tests.log`). These factors are engineering defaults, not perceptually validated intensity levels.
+
+## Interactive local workbench (completed offline workflow)
+
+The static report/CLI above remains available. `workbench.py` + `workbench.html` now provide the same workflow with actual upload, strength and apply controls. Start from the canonical repository:
+
+```sh
+bash scripts/start-offline-workbench.sh
+```
+
+Open `http://127.0.0.1:8780`. The launcher requires the existing ML environment, saved pitch/velocity checkpoint and built DatasetRenderer; it does not download/train anything. Stop the server with Ctrl+C. `--port 8781` can select another port.
+
+1. Click **使用已验证示例**, or select a supported WAV and enter its known MIDI note/velocity. The demo is the same validation example; its known performance values are fixed automatically.
+2. Enter an intent and choose 轻微 / 适中 / 明显. Local rules are the default. Optionally enable the existing AI service (requires the separately running `service/server.py`); only text/parameters go to it, never audio or API keys.
+3. Click **分析并生成建议**. Analysis, service requests and rendering execute on a standalone background worker. The page remains responsive and polls progress.
+4. Review the native-unit parameter table, the explicitly labeled proposal source/fallback, original audio, reconstructed audio and technical reconstruction difference. Changed input settings invalidate the current apply action until another proposal is generated.
+5. Click **确认参数并渲染修改版**. The browser sends the reviewed proposal hash, the backend validates it and renders/verifies the modified WAV. Compare Reconstruction against Modified. Players pause each other to avoid accidental overlap; playback is not normalized.
+
+Each proposal gets a separate folder under `ml/runs/workbench/`, including copied input, immutable proposal, render manifests/readbacks and applied result. Existing demos/runs remain intact. Current job discovery is in-memory: after a server restart create a new session; artifacts and static reports remain on disk. Only one job is accepted at a time, so repeated application and concurrent submissions do not duplicate rendering.
+
+The server binds only `127.0.0.1`, validates Host/Origin and a page-specific request token, limits uploads, and serves only known session artifacts. There is no arbitrary filesystem browser, external hosting, plugin integration or training/test reevaluation. The same four-second PCM24 audio restrictions and unvalidated perceptual intensity defaults still apply. This completes an experimental offline workflow, not arbitrary-audio understanding or a real-time deployment.
+
+Validation: 22 ML tests passed (`build/workbench-tests.log`), including real HTTP requests, uploaded WAV inference, demo analysis, explicit reviewed apply, JUCE audio/readbacks, invalid input/session checks, artifact-path rejection and duplicate-apply refusal. The ML model, training/evaluation artifacts and plugin runtime sources were not modified. New service availability is not claimed: integration tests use the deterministic local mode; real service calls continue to use the existing adapter with a visibly labeled fallback.
+
+Manual browser acceptance: the running workbench was exercised with the known validation demo, strong intensity, proposal review and explicit apply. The page displayed all three audio players and expected native-unit values. The modified WAV loaded in the browser as four seconds with no media error and playback started successfully. This validates the UI/render path, not perceptual quality or live OpenAI availability.
+
+## Useful external-reference workflow
+
+`reference_match.py` provides the plugin's new `Match reference WAV` workflow through the existing local service (`POST /match`). It uses bounded JUCE render search, not the old constrained CNN. Dry single-note WAVs can be mono/stereo at 8–96 kHz; MIDI gate duration is supplied and pitch is estimated or supplied. Results are editable waveform/cutoff/attack/release starting points with saved render/readback evidence. See `docs/reference-matching.md` for scope, matching-level alignment, actual demo metrics, thread ownership and reproduction. The previous ML datasets/results remain unchanged.
+
+
+## Expanded-domain initializer experiment
+
+[INITIALIZER_PROTOCOL.md](INITIALIZER_PROTOCOL.md) freezes the new four-waveform, variable-pitch/velocity/nuisance experiment. [initializer_config.json](initializer_config.json) records all seeds, ranges and training limits. No old datasets/checkpoints are overwritten.
+
+```sh
+OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 ml/.venv/bin/python ml/initializer_experiment.py all
+```
+
+Run once from the repository root after building `DatasetRenderer`. Existing output directories and the test-evaluation marker prevent accidental repeats. Stages `prepare`, `train`, and `evaluate` can run in that order instead. Data: `ml/data/initializer_smoke` and `ml/data/initializer_3000`; model, shuffled control, cached predictions and actual-render search comparisons: `ml/runs/initializer_experiment`. The 32 search-reference IDs are frozen in the dataset before training. `ml/INITIALIZER_RESULTS.md` is written only after measured evaluation completes. This is from-scratch small-model training, not OpenAI fine-tuning. CPU forward timings exclude feature extraction and rendering; no real-time deployment claim is made.
+
+
+## Frozen-model hybrid matching validation
+
+`ml/.venv/bin/python ml/hybrid_match.py` runs a separate one-shot offline development validation, using the frozen initializer checkpoint and training preprocessing. [HYBRID_MATCH_PROTOCOL.md](HYBRID_MATCH_PROTOCOL.md) defines the 16 new independent fixtures, DSP vs hybrid comparison and equal 52-render budget. [HYBRID_MATCH_RESULTS.md](HYBRID_MATCH_RESULTS.md) records measured results, including negative comparisons. Outputs, per-example seeds/scores, blind listening page and separate answer key live in `ml/runs/hybrid_match/`. The script refuses to overwrite that directory. No old test audio is reused, no fit is performed, and the plugin is unchanged. Human listening results remain unmeasured.
+
+
+Seven-control Match: [protocol](MATCH_MODEL_PROTOCOL.md), [measured results](MATCH_MODEL_RESULTS.md). New 3,000-example dataset; six regression targets plus waveform. The CNN gives no final fixed-budget search advantage (24/24 ties), so default Match retains DSP. Per-match shared-scale spectrogram/envelope diagnostics remain internal.

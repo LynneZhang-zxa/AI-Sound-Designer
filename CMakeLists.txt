@@ -54,6 +54,14 @@ if(BUILD_TESTING)
     target_link_libraries(SynthTests PRIVATE AISoundDesigner)
     target_include_directories(SynthTests PRIVATE "${juce_SOURCE_DIR}/modules")
     add_test(NAME SynthTests COMMAND SynthTests)
+    add_executable(EditorTests plugin/tests/EditorTests.cpp)
+    target_include_directories(EditorTests PRIVATE plugin/Source "${juce_SOURCE_DIR}/modules")
+    target_compile_features(EditorTests PRIVATE cxx_std_17)
+    target_compile_definitions(EditorTests PRIVATE JucePlugin_Name="AI Sound Designer" JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_compile_definitions(EditorTests PRIVATE AISD_EDITOR_PREVIEW="${CMAKE_BINARY_DIR}/plugin-assistant-preview.png")
+    target_link_libraries(EditorTests PRIVATE AISoundDesigner)
+    add_test(NAME EditorTests COMMAND EditorTests)
+
 endif()
 
 # Optional macOS 26+ on-device AI helper; never linked into the audio plugin.

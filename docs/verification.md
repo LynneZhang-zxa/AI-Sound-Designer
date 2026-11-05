@@ -1,5 +1,8 @@
 # Verification — 2026-10-20
 
+> Historical evidence log. Current consolidated delivery status: [release-status.md](release-status.md).
+
+
 Canonical source: `/Users/zhangxiai/Desktop/AI-Sound-Designer`. No commits or pushes were performed.
 
 ## Observed results
