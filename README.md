@@ -56,7 +56,7 @@ Services bind to `127.0.0.1`: prompt **8765**, analysis **8766**. Native-plugin 
 
 ## Use the plugin
 
-- **Propose changes:** try `更暖、更柔和，保留尾音` at Medium with Live AI off, or enable Live AI for broader language. Review the numbers and reasons before Apply. Undo restores the prior patch unless a newer manual/host change has occurred.
+- **Propose changes:** try `Make it warmer and softer while preserving the release tail` at Medium with Live AI off, or enable Live AI for broader language. Review the numbers and reasons before Apply. Undo restores the prior patch unless a newer manual/host change has occurred.
 - **Analyze sound:** measures a standardized background MIDI-48 render of the current patch. It does not capture live audio or analyze the imported WAV. Progress and completed RMS/peak/centroid appear in the main status.
 - **Match reference WAV:** select a dry isolated note, include its release tail, enter its known MIDI gate duration (note-on to note-off, **not file duration**) and use Auto pitch or a known note. Review, Apply and audition at the displayed pitch; Undo is available.
 - **Resize:** drag the bottom-right diagonal grip. Logical size limits are 720×660 to 1440×1320; all sections scale together. UI size/conversation history are not part of saved synth parameters.
